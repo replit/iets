@@ -1,0 +1,95 @@
+{
+  "note": "Fresh source builds in a prewarmed store; includes invalidated external cgo dependencies, planning, evaluation, database generation and wrapping.",
+  "samples": [
+    {
+      "client": "iets",
+      "trial": 0,
+      "seconds": 89.08709269700012,
+      "output": "/nix/store/g1dxrz346vxd3iziwy7lbb6bimg3cmx0-upm-drvgo",
+      "command": [
+        "/workspace/iets/target/release/iets",
+        "build",
+        "--impure",
+        "--no-tracing-cache",
+        "--workers",
+        "1",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /tmp/upm-compile-yr_ropw8/0-iets; }).package"
+      ],
+      "help_exit": 0
+    },
+    {
+      "client": "determinate",
+      "trial": 0,
+      "seconds": 88.91069620399958,
+      "output": "/nix/store/jrh0l9v6m9sqk4hn1pf9a4x74skh5i0h-upm-drvgo",
+      "command": [
+        "nix-build",
+        "--no-out-link",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /tmp/upm-compile-yr_ropw8/0-determinate; }).package"
+      ],
+      "help_exit": 0
+    },
+    {
+      "client": "determinate",
+      "trial": 1,
+      "seconds": 89.80313975599984,
+      "output": "/nix/store/y3fbdpkkvyhlavd31kgbyq9zgzgz1phk-upm-drvgo",
+      "command": [
+        "nix-build",
+        "--no-out-link",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /tmp/upm-compile-yr_ropw8/1-determinate; }).package"
+      ],
+      "help_exit": 0
+    },
+    {
+      "client": "iets",
+      "trial": 1,
+      "seconds": 84.0740111820005,
+      "output": "/nix/store/l4f61bkb8j9idgxp48fwbf0jydrn99aq-upm-drvgo",
+      "command": [
+        "/workspace/iets/target/release/iets",
+        "build",
+        "--impure",
+        "--no-tracing-cache",
+        "--workers",
+        "1",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /tmp/upm-compile-yr_ropw8/1-iets; }).package"
+      ],
+      "help_exit": 0
+    },
+    {
+      "client": "iets",
+      "trial": 2,
+      "seconds": 81.07874024699959,
+      "output": "/nix/store/ydh2p8dbqa13sm8wbcv4d5cvcxbnn98z-upm-drvgo",
+      "command": [
+        "/workspace/iets/target/release/iets",
+        "build",
+        "--impure",
+        "--no-tracing-cache",
+        "--workers",
+        "1",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /tmp/upm-compile-yr_ropw8/2-iets; }).package"
+      ],
+      "help_exit": 0
+    },
+    {
+      "client": "determinate",
+      "trial": 2,
+      "seconds": 89.69095421800012,
+      "output": "/nix/store/1f4k1l1w0qfs2fcb3rmw0r0kgx7zghcx-upm-drvgo",
+      "command": [
+        "nix-build",
+        "--no-out-link",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /tmp/upm-compile-yr_ropw8/2-determinate; }).package"
+      ],
+      "help_exit": 0
+    }
+  ]
+}

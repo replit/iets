@@ -1,0 +1,199 @@
+{
+  "commands": {
+    "eval": {
+      "iets": [
+        "/workspace/iets/target/release/iets",
+        "eval",
+        "--impure",
+        "--raw",
+        "--no-tracing-cache",
+        "--workers",
+        "1",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /nix/store/r3azknj8cz74gnw86kdq2jcjvg4vc1wd-source; }).package.drvPath"
+      ],
+      "determinate": [
+        "nix-instantiate",
+        "--eval",
+        "--strict",
+        "--read-write-mode",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /nix/store/r3azknj8cz74gnw86kdq2jcjvg4vc1wd-source; }).package.drvPath"
+      ]
+    },
+    "warm-build": {
+      "iets": [
+        "/workspace/iets/target/release/iets",
+        "build",
+        "--impure",
+        "--no-tracing-cache",
+        "--workers",
+        "1",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /nix/store/r3azknj8cz74gnw86kdq2jcjvg4vc1wd-source; }).package"
+      ],
+      "determinate": [
+        "nix-build",
+        "--no-out-link",
+        "-E",
+        "(import ./examples/upm/dynamic.nix { source = /nix/store/r3azknj8cz74gnw86kdq2jcjvg4vc1wd-source; }).package"
+      ]
+    }
+  },
+  "samples": [
+    {
+      "phase": "eval",
+      "client": "determinate",
+      "run": 1,
+      "seconds": 1.3048401899995952,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "iets",
+      "run": 1,
+      "seconds": 0.6081037739995736,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "iets",
+      "run": 2,
+      "seconds": 0.5506039339998097,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "determinate",
+      "run": 2,
+      "seconds": 1.4588833759999034,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "determinate",
+      "run": 3,
+      "seconds": 1.326071896999565,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "iets",
+      "run": 3,
+      "seconds": 0.6089354599998842,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "iets",
+      "run": 4,
+      "seconds": 0.581556850999732,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "determinate",
+      "run": 4,
+      "seconds": 1.3731455639999695,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "determinate",
+      "run": 5,
+      "seconds": 1.593434630000047,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "eval",
+      "client": "iets",
+      "run": 5,
+      "seconds": 0.5877071329996397,
+      "result": "/nix/store/r5q8qap0bs40lgwjgn41qwizpcdi5n26-upm-drvgo.drv"
+    },
+    {
+      "phase": "warm-build",
+      "client": "determinate",
+      "run": 1,
+      "seconds": 1.5679668160000801,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "iets",
+      "run": 1,
+      "seconds": 0.5791242459999921,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "iets",
+      "run": 2,
+      "seconds": 0.6153836760004197,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "determinate",
+      "run": 2,
+      "seconds": 1.4069957619994966,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "determinate",
+      "run": 3,
+      "seconds": 1.414531684999929,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "iets",
+      "run": 3,
+      "seconds": 0.603366731999813,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "iets",
+      "run": 4,
+      "seconds": 0.603380556999582,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "determinate",
+      "run": 4,
+      "seconds": 1.3520378690000143,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "determinate",
+      "run": 5,
+      "seconds": 1.2411019099999976,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    },
+    {
+      "phase": "warm-build",
+      "client": "iets",
+      "run": 5,
+      "seconds": 0.5695490429998245,
+      "result": "/nix/store/b6j7yh4ys9594j6yqzsdph1lnk2m0rdn-upm-drvgo"
+    }
+  ],
+  "medians_seconds": {
+    "eval": {
+      "iets": 0.5877071329996397,
+      "determinate": 1.3731455639999695
+    },
+    "warm-build": {
+      "iets": 0.603366731999813,
+      "determinate": 1.4069957619994966
+    }
+  },
+  "source": "/nix/store/r3azknj8cz74gnw86kdq2jcjvg4vc1wd-source",
+  "nix_version": "nix (Determinate Nix 3.24.2) 2.35.3",
+  "drvgo_revision": "957f2c8805c639848ba1ddcae3097586d50d2a25",
+  "note": "Warm page/store caches; tracing cache disabled; compilation excluded."
+}

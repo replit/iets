@@ -325,6 +325,7 @@ pub struct Worker {
     transport: Transport,
     options: Options,
     t: Timings,
+    built_outputs: HashMap<String, BTreeMap<String, Option<String>>>,
 }
 
 impl Worker {
@@ -342,6 +343,7 @@ impl Worker {
             conn,
             transport: transport.clone(),
             options: options.clone(),
+            built_outputs: HashMap::new(),
         })
     }
 }
@@ -457,6 +459,12 @@ impl Backend for Worker {
         let mut out: HashMap<String, Status> = HashMap::new();
         for r in &results {
             let drv = r.path.split('!').next().unwrap_or(&r.path).to_string();
+            if r.success() {
+                self.built_outputs
+                    .entry(drv.clone())
+                    .or_default()
+                    .extend(r.outputs.clone());
+            }
             let e = out.entry(drv).or_insert_with(Status::ok);
             if !r.success() {
                 let exit = log::build_exit(r.status, &r.msg);
@@ -479,6 +487,9 @@ impl Backend for Worker {
         drv: &str,
         on_event: &mut dyn FnMut(Event),
     ) -> Result<BTreeMap<String, Option<String>>> {
+        if let Some(outputs) = self.built_outputs.get(drv).filter(|o| !o.is_empty()) {
+            return Ok(outputs.clone());
+        }
         let t0 = Instant::now();
         let map = self.conn.query_derivation_output_map(drv, on_event)?;
         self.t.outputs += t0.elapsed();
