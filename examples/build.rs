@@ -9,11 +9,11 @@ use std::collections::HashMap;
 use std::env;
 use std::process::{self, ExitCode};
 
-use iets::api::installable::drv_roots;
+use iets::api::installable::derived_roots;
 use iets::api::{self, EvalArgs, Input};
+use iets::build::Dispatcher;
 use iets::build::render::Style;
 use iets::build::upload::PlanUpload;
-use iets::build::{Dispatcher, Target};
 use iets::eval::Evaluator;
 use iets::remote::{plan, worker};
 use iets::store::locate::locate_in_store;
@@ -61,12 +61,13 @@ fn main() -> ExitCode {
 
 fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
     let mut roots = Vec::new();
-    if let Err(e) = api::evaluate(ev, a).and_then(|v| drv_roots(ev, v, &mut roots)) {
+    if let Err(e) = api::evaluate(ev, a).and_then(|v| derived_roots(ev, v, &mut roots)) {
         api::report(ev, &e);
         return 1;
     }
     // `--out` would add wanted outputs; the roots' string context is enough here.
-    let (root_paths, outputs) = api::build_targets(&[], &roots);
+    let mut targets = api::build_targets(&[], &roots);
+    let root_paths: Vec<_> = targets.iter().map(|t| t.drv.root.clone()).collect();
     let prov = iets::provenance::Provenance::snapshot(ev);
 
     // Every derivation and source this evaluation created, straight from
@@ -105,10 +106,9 @@ fn eval_and_build(ev: &mut Evaluator, a: EvalArgs, url: String) -> u8 {
             return 1;
         }
     };
-    let targets: Vec<Target> = root_paths
-        .iter()
-        .map(|r| Target::new(r.name(), r.clone(), outputs.clone()))
-        .collect();
+    for t in &mut targets {
+        t.attr = t.drv.name().to_string();
+    }
     let outcomes = match d.submit(&mut PlanUpload::new(&plan, &locate), targets) {
         Ok(o) => o,
         Err(e) => {

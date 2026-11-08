@@ -623,7 +623,7 @@ fn dev_env_build(ev: &mut Evaluator, a: EvalArgs, d: &DevEnvArgs) -> Result<DevE
                 &mut |e| sink.event(e),
             )?;
             let job = Job {
-                drv: env_path.clone(),
+                drv: env_path.clone().into(),
                 outputs: Vec::new(),
             };
             let batch = Batch {

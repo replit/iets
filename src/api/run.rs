@@ -11,7 +11,7 @@ use crate::store::path::StorePath;
 use crate::trace::run::Cache;
 use crate::trace::store::Part;
 
-use super::build::{self, Plan};
+use super::build::{self, DerivedPath, Plan};
 use super::{EvalArgs, project_root, report, setup_cache, setup_cache_more};
 use crate::error::{self, Error};
 
@@ -25,7 +25,7 @@ pub enum Outcome<T> {
 }
 
 /// A build entry's result: each root derivation and the outputs wanted of it.
-pub type Roots = Vec<(StorePath, Option<String>)>;
+pub type Roots = Vec<(DerivedPath, Option<String>)>;
 
 pub struct Run {
     /// The evaluator is built from it once, in `go`.
@@ -112,7 +112,7 @@ impl Run {
     pub fn hit_plan(&self) -> Option<(Roots, Plan)> {
         self.hit(|c| {
             let t = c.read_build()?;
-            let paths: Vec<StorePath> = t.roots.iter().map(|(p, _)| p.clone()).collect();
+            let paths: Vec<StorePath> = t.roots.iter().map(|(p, _)| p.root.clone()).collect();
             let inputs = build::Inputs {
                 drvs: &t.drvs,
                 sources: &t.sources,

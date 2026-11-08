@@ -1090,7 +1090,9 @@ impl Connection {
     /// checks of Nix's client included.
     fn read_build_result(&mut self) -> Result<BuildResult> {
         let r = self.r();
-        let path = wire::derived_path(&read_str(r)?).map_err(conn)?;
+        // Nix prints nested SingleDerivedPath steps with `^`, even in the
+        // legacy derived-path field used by the worker protocol.
+        let path = wire::derived_path(&read_str(r)?.replace('^', "!")).map_err(conn)?;
         // common-protocol.cc:buildResultStatusTable
         let status = wire::read_num(r, u8::MAX.into()).map_err(conn)?;
         if status > 14 {

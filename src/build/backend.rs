@@ -26,6 +26,7 @@ use crate::remote::grpc::backend::Grpc;
 use crate::remote::plan::{self, Object, Plan};
 use crate::remote::worker::wire::{self, write_object};
 use crate::remote::worker::{Connection, Missing, Options, Stats, Transport, default_socket};
+use crate::store::derived::DerivedPath;
 use crate::store::nar;
 use crate::store::narinfo::Fetched;
 use crate::store::path::StorePath;
@@ -33,12 +34,16 @@ use crate::store::path::StorePath;
 /// One derivation of a ready set, and the outputs the caller wants.
 #[derive(Debug, Clone)]
 pub struct Job {
-    pub drv: StorePath,
+    pub drv: DerivedPath,
     /// Empty means every output.
     pub outputs: Vec<String>,
 }
 
 impl Job {
+    pub fn key(&self) -> String {
+        format!("{}!{}", self.drv, self.spec())
+    }
+
     /// `<out1,out2>` or `*`, the output half of a derived path.
     pub fn spec(&self) -> String {
         if self.outputs.is_empty() {
@@ -135,8 +140,8 @@ pub trait Backend {
         self.add_objects(&objects.iter().collect::<Vec<_>>(), on_event)
     }
 
-    /// Builds a ready set. Every job gets a verdict, keyed by its derivation
-    /// path; a job the store never reached is absent from the map.
+    /// Builds a ready set. Every job gets a verdict keyed by `Job::key`,
+    /// including its output selection; an unreached job is absent.
     fn submit(
         &mut self,
         batch: &Batch<'_>,
@@ -151,7 +156,7 @@ pub trait Backend {
         ))
     }
 
-    /// Output name to store path for a derivation that built.
+    /// Output name to store path for a job key, or a concrete derivation.
     fn outputs(
         &mut self,
         drv: &str,
@@ -448,17 +453,13 @@ impl Backend for Worker {
         batch: &Batch<'_>,
         on_event: &mut dyn FnMut(Event),
     ) -> Result<HashMap<String, Status>> {
-        let targets: Vec<String> = batch
-            .jobs
-            .iter()
-            .map(|j| format!("{}!{}", j.drv, j.spec()))
-            .collect();
+        let targets: Vec<String> = batch.jobs.iter().map(Job::key).collect();
         let t0 = Instant::now();
         let results = self.conn.build_paths_with_results(&targets, on_event)?;
         self.t.build += t0.elapsed();
         let mut out: HashMap<String, Status> = HashMap::new();
         for r in &results {
-            let drv = r.path.split('!').next().unwrap_or(&r.path).to_string();
+            let drv = r.path.clone();
             if r.success() {
                 self.built_outputs
                     .entry(drv.clone())
@@ -475,10 +476,7 @@ impl Backend for Worker {
     }
 
     fn missing(&mut self, jobs: &[Job], on_event: &mut dyn FnMut(Event)) -> Result<Missing> {
-        let paths: Vec<String> = jobs
-            .iter()
-            .map(|j| format!("{}!{}", j.drv, j.spec()))
-            .collect();
+        let paths: Vec<String> = jobs.iter().map(Job::key).collect();
         self.conn.query_missing(&paths, on_event)
     }
 
@@ -491,7 +489,13 @@ impl Backend for Worker {
             return Ok(outputs.clone());
         }
         let t0 = Instant::now();
-        let map = self.conn.query_derivation_output_map(drv, on_event)?;
+        let path = drv.rsplit_once('!').map_or(drv, |(path, _)| path);
+        if path.contains('!') {
+            return Err(Error::Store(format!(
+                "the builder returned no output paths for dynamic target '{drv}'"
+            )));
+        }
+        let map = self.conn.query_derivation_output_map(path, on_event)?;
         self.t.outputs += t0.elapsed();
         Ok(map)
     }
@@ -639,12 +643,12 @@ pub(crate) mod tests {
     #[test]
     fn output_specs() {
         let j = Job {
-            drv: drv("x"),
+            drv: drv("x").into(),
             outputs: vec![],
         };
         assert_eq!(j.spec(), "*");
         let j = Job {
-            drv: drv("x"),
+            drv: drv("x").into(),
             outputs: vec!["dev".into(), "out".into(), "out".into()],
         };
         assert_eq!(j.spec(), "dev,out");

@@ -184,7 +184,7 @@ pub fn read_num(r: &mut dyn Read, max: u64) -> io::Result<u64> {
     Ok(n)
 }
 
-/// derived-path.cc:DerivedPath::parseLegacy without dynamic derivations:
+/// derived-path.cc:DerivedPath::parseLegacy:
 /// `PATH`, `PATH!*` or `PATH!NAME,...`, held as to_string_legacy writes it,
 /// with the names sorted and each once.
 pub fn derived_path(s: &str) -> io::Result<String> {
@@ -192,12 +192,14 @@ pub fn derived_path(s: &str) -> io::Result<String> {
         StorePath::parse(s).map_err(|e| bad(&e.to_string()))?;
         return Ok(s.to_string());
     };
-    if drv.contains('!') {
-        return Err(bad(&format!(
-            "'{s}' builds an output of a derivation output, which needs dynamic-derivations"
-        )));
+    let mut parts = drv.split('!');
+    StorePath::parse(parts.next().unwrap()).map_err(|e| bad(&e.to_string()))?;
+    for output in parts {
+        check_name(output).map_err(|e| bad(&e.to_string()))?;
+        if output.contains(',') || output == "*" {
+            return Err(bad("a dynamic derivation step needs one output name"));
+        }
     }
-    StorePath::parse(drv).map_err(|e| bad(&e.to_string()))?;
     if outputs == "*" {
         return Ok(s.to_string());
     }
@@ -546,7 +548,10 @@ mod tests {
         );
         assert_eq!(derived_path(&format!("{d}!*")).unwrap(), format!("{d}!*"));
         assert!(derived_path(d).is_ok());
-        assert!(derived_path(&format!("{d}!out!bin")).is_err());
+        assert_eq!(
+            derived_path(&format!("{d}!out!bin")).unwrap(),
+            format!("{d}!out!bin")
+        );
         assert!(derived_path(&format!("{d}!")).is_err());
         assert!(derived_path("/etc/passwd!out").is_err());
         let hex = "4ab29c33e1fd9f3e3e1ebf6e0da0e8f8c3a5e3a73c92c4e9d6e8c04b1a5f2b3d";

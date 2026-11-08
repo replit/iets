@@ -245,7 +245,7 @@ fn run(ev: &mut Evaluator, a: EvalArgs, o: Opts) -> Result<(), Box<Error>> {
                 installable::get_drvs_at(ev, v, args, &mut rs, &mut seen, &start)?;
                 for r in rs {
                     // the walk records the path it reached each derivation by
-                    let at = (ev.drv.drvs.get(&r.drv))
+                    let at = (ev.drv.drvs.get(&r.drv.root))
                         .and_then(|i| i.attr)
                         .or_else(|| attr.clone());
                     roots.push(root_json(&r.drv, Some(r.output), at));
@@ -354,7 +354,7 @@ fn roots(args: &[String], stdin: bool, drvs: Option<PathBuf>) -> Roots {
 }
 
 fn paths_of(targets: &[Target]) -> Vec<StorePath> {
-    targets.iter().map(|t| t.drv.clone()).collect()
+    targets.iter().map(|t| t.drv.root.clone()).collect()
 }
 
 /// The plan of the roots: from the derivations `--dump-drvs` wrote when there
@@ -478,7 +478,7 @@ fn cache_status(
         lines.push(Line::Job(Job {
             attr: t.attr.clone(),
             attr_path: Vec::new(),
-            drv_path: t.drv.clone(),
+            drv_path: t.drv.root.clone(),
             outputs,
             constituents: Vec::new(),
             named_constituents: None,

@@ -520,13 +520,13 @@ pub(super) fn resolve(ev: &mut Evaluator, n: &Nix, what: &str, cwd: &[u8]) -> Ev
 /// are joined with a comma, which no output name can hold (store path names
 /// are `[A-Za-z0-9+._?=-]`), so the installables stay apart: the n-th one
 /// names its own out-link.
-fn remember(targets: &[installable::Install]) -> Vec<(StorePath, Option<String>)> {
+fn remember(targets: &[installable::Install]) -> Vec<(build::DerivedPath, Option<String>)> {
     (targets.iter())
         .map(|t| (t.drv.clone(), Some(t.outputs.join(","))))
         .collect()
 }
 
-fn remembered(roots: Vec<(StorePath, Option<String>)>) -> Vec<installable::Install> {
+fn remembered(roots: Vec<(build::DerivedPath, Option<String>)>) -> Vec<installable::Install> {
     (roots.into_iter())
         .map(|(drv, outputs)| installable::Install {
             drv,

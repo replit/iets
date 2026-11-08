@@ -40,6 +40,7 @@ use crate::remote::event::Event;
 use crate::remote::plan::Plan;
 use crate::remote::worker::{Missing, Options, Transport};
 use crate::session::{self, Session};
+use crate::store::derived::DerivedPath;
 use crate::store::path::{StorePath, drv_name};
 
 use crate::store::drv::{Derivation, DerivationOutput};
@@ -54,7 +55,7 @@ use upload::Uploader;
 pub struct Target {
     /// Attribute path, or the derivation name when the caller has none.
     pub attr: String,
-    pub drv: StorePath,
+    pub drv: DerivedPath,
     /// Wanted output names; empty means every output (`!*`).
     pub outputs: Vec<String>,
 }
@@ -69,10 +70,14 @@ impl From<&Target> for backend::Job {
 }
 
 impl Target {
-    pub fn new(attr: &str, drv: StorePath, outputs: Vec<String>) -> Target {
+    fn key(&self) -> String {
+        backend::Job::from(self).key()
+    }
+
+    pub fn new(attr: &str, drv: impl Into<DerivedPath>, outputs: Vec<String>) -> Target {
         Target {
             attr: attr.to_string(),
-            drv,
+            drv: drv.into(),
             outputs,
         }
     }
@@ -82,7 +87,7 @@ impl Target {
 #[derive(Debug, Clone)]
 pub struct Outcome {
     pub attr: String,
-    pub drv: StorePath,
+    pub drv: DerivedPath,
     pub success: bool,
     pub skipped: bool,
     pub reason: Option<String>,
@@ -222,7 +227,7 @@ pub struct Dispatcher {
     backend: Box<dyn Backend>,
     pub reporter: Reporter,
     prov: Provenance,
-    seen: HashSet<StorePath>,
+    seen: HashSet<(DerivedPath, Vec<String>)>,
     /// Nix's failingExitStatus of the failed builds, 0 while none failed.
     pub exit: i32,
     pub upload: upload::Stats,
@@ -274,11 +279,16 @@ impl Dispatcher {
     }
 
     /// Uploads what the batch needs and builds it in one op. Targets whose
-    /// drv was already dispatched are dropped.
+    /// full path and output selection were already dispatched are dropped.
     pub fn submit(&mut self, up: &mut dyn Uploader, batch: Vec<Target>) -> Result<Vec<Outcome>> {
         let batch: Vec<Target> = batch
             .into_iter()
-            .filter(|t| self.seen.insert(t.drv.clone()))
+            .filter(|t| {
+                let mut outputs = t.outputs.clone();
+                outputs.sort();
+                outputs.dedup();
+                self.seen.insert((t.drv.clone(), outputs))
+            })
             .collect();
         if batch.is_empty() {
             return Ok(Vec::new());
@@ -292,7 +302,7 @@ impl Dispatcher {
         let by_drv: HashMap<String, String> = (batch.iter())
             .map(|t| (t.drv.to_string(), t.attr.clone()))
             .collect();
-        let roots: Vec<StorePath> = batch.iter().map(|t| t.drv.clone()).collect();
+        let roots: Vec<StorePath> = batch.iter().map(|t| t.drv.root.clone()).collect();
         // Until this op reports its verdicts, the end of a build's activity
         // decides nothing: with a build hook the daemon runs two activities
         // for one derivation, and neither says whether it succeeded.
@@ -309,8 +319,9 @@ impl Dispatcher {
             None => false,
         };
         let status = match held {
-            true => (by_drv.keys())
-                .map(|d| (d.clone(), backend::Status::ok()))
+            true => batch
+                .iter()
+                .map(|t| (t.key(), backend::Status::ok()))
                 .collect(),
             false => {
                 let stats = {
@@ -339,13 +350,14 @@ impl Dispatcher {
         for t in batch {
             let drv = t.drv.to_string();
             let elapsed = self.reporter.duration(&drv);
-            match status.get(&drv) {
+            let key = t.key();
+            match status.get(&key) {
                 Some(s) if s.ok => {
-                    let map = match built.as_ref().and_then(|b| b.get(&drv)) {
+                    let map = match built.as_ref().and_then(|b| b.get(&key)) {
                         Some(m) => m.clone(),
                         None => {
                             let mut on_event = event_sink(&mut self.reporter, &self.prov, &by_drv);
-                            self.backend.outputs(&drv, &mut on_event)?
+                            self.backend.outputs(&key, &mut on_event)?
                         }
                     };
                     let outputs: BTreeMap<String, String> = map
@@ -467,7 +479,7 @@ impl Dispatcher {
     /// `--dry-run`: register the closure, then ask what building `targets`
     /// takes.
     pub fn missing(&mut self, up: &mut dyn Uploader, targets: &[Target]) -> Result<Missing> {
-        let roots: Vec<StorePath> = targets.iter().map(|t| t.drv.clone()).collect();
+        let roots: Vec<StorePath> = targets.iter().map(|t| t.drv.root.clone()).collect();
         self.upload_only(up, &roots)?;
         let jobs: Vec<backend::Job> = targets.iter().map(backend::Job::from).collect();
         let by_drv = HashMap::new();
@@ -519,7 +531,10 @@ fn static_outputs(
     let drvs = up.drvs(roots, false).ok()?;
     let mut all = HashMap::new();
     for t in batch {
-        let d = drvs.iter().find(|d| d.path == t.drv)?;
+        if !t.drv.chain.is_empty() {
+            return None;
+        }
+        let d = drvs.iter().find(|d| d.path == t.drv.root)?;
         let parsed = Derivation::parse(&d.aterm, Derivation::name_from_path(&t.drv).ok()?).ok()?;
         if t.outputs.iter().any(|n| !parsed.outputs.contains_key(n)) {
             return None;
@@ -531,7 +546,7 @@ fn static_outputs(
                 outs.insert(n.clone(), Some(p.to_string()));
             }
         }
-        all.insert(t.drv.to_string(), outs);
+        all.insert(t.key(), outs);
     }
     Some(all)
 }
@@ -731,6 +746,41 @@ mod tests {
         assert_eq!(j.spec(), "dev,out");
     }
 
+    #[test]
+    fn dispatch_keeps_distinct_chains_and_output_selections() {
+        let mut d = Dispatcher::with_backend(
+            Box::new(Fan {
+                limit: 1,
+                peak: Arc::new(AtomicBool::new(false)),
+                verdicts: true,
+            }),
+            Provenance::off(),
+            Reporter::with_output(
+                Style {
+                    mode: render::Mode::Ci,
+                    color: false,
+                    fold: false,
+                    quiet: true,
+                },
+                Box::new(Sink::default()),
+            ),
+        );
+        let path = |chain: &[&str]| DerivedPath {
+            root: drv("producer"),
+            chain: chain.iter().map(|s| s.to_string()).collect(),
+        };
+        let targets = vec![
+            Target::new("one", path(&["out"]), vec!["out".into()]),
+            Target::new("two", path(&["dev"]), vec!["out".into()]),
+            Target::new("three", path(&["out", "nested"]), vec!["out".into()]),
+            Target::new("four", path(&["out"]), vec!["dev".into()]),
+        ];
+        let result = d.submit(&mut NoUpload, targets.clone()).unwrap();
+        assert_eq!(result.len(), 4);
+        assert!(result.iter().all(|o| o.success));
+        assert!(d.submit(&mut NoUpload, targets).unwrap().is_empty());
+    }
+
     /// A backend that builds every job of a batch concurrently, the way the
     /// `grpc://` farm does, and tags every line it streams with its drv.
     struct Fan {
@@ -806,7 +856,7 @@ mod tests {
             }
             Ok(jobs
                 .iter()
-                .map(|j| (j.drv.to_string(), backend::Status::ok()))
+                .map(|j| (j.key(), backend::Status::ok()))
                 .collect())
         }
 
@@ -815,7 +865,7 @@ mod tests {
             drv: &str,
             _on_event: &mut dyn FnMut(Event),
         ) -> Result<BTreeMap<String, Option<String>>> {
-            let p = StorePath::parse(drv)?;
+            let p = StorePath::parse(drv.split('!').next().unwrap())?;
             Ok(BTreeMap::from([(
                 "out".to_string(),
                 Some(format!("/nix/store/{}", p.base_name().replace(".drv", ""))),
@@ -964,7 +1014,7 @@ mod tests {
             }
             let why = format!("1 dependencies of derivation '{}' failed", drv("pkg"));
             Ok((batch.jobs.iter())
-                .map(|j| (j.drv.to_string(), backend::Status::failed(why.clone(), 1)))
+                .map(|j| (j.key(), backend::Status::failed(why.clone(), 1)))
                 .collect())
         }
 

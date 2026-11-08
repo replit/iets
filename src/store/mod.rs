@@ -1,6 +1,7 @@
 //! Pure store-layer functions: hashing, NAR, store paths and derivations.
 //! No dependency on the runtime.
 
+pub mod derived;
 pub mod drv;
 pub mod drvdiff;
 pub mod hash;

@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::str::from_utf8;
 
-use crate::api::build::Root;
+use crate::api::build::{DerivedPath, Root};
 use crate::builtins::strings::parse_drv_name_bytes;
 use crate::eval::{Error, ErrorKind, EvalResult, Evaluator, Pos};
 use crate::runtime::{self, AttrsObj, Cell, Ctx, Word};
@@ -380,6 +380,26 @@ pub fn drv_roots(
     v: Word,
     roots: &mut Vec<(StorePath, Option<String>)>,
 ) -> EvalResult<()> {
+    let mut derived = Vec::new();
+    derived_roots(ev, v, &mut derived)?;
+    for (drv, output) in derived {
+        if !drv.chain.is_empty() {
+            return Err(Error::boxed(
+                ErrorKind::Unsupported,
+                "this operation needs a concrete derivation; use build for dynamic outputs",
+                Pos::NONE,
+            ));
+        }
+        roots.push((drv.root, output));
+    }
+    Ok(())
+}
+
+pub fn derived_roots(
+    ev: &mut Evaluator,
+    v: Word,
+    roots: &mut Vec<(DerivedPath, Option<String>)>,
+) -> EvalResult<()> {
     let bad = |msg: String| Error::boxed(ErrorKind::Eval, msg, Pos::NONE);
     let v = ev.force(v)?;
     if let Some(attrs) = v.as_attrs() {
@@ -392,7 +412,7 @@ pub fn drv_roots(
         if !p.is_derivation() {
             return Err(bad(format!("'{p}' is not a derivation path")));
         }
-        roots.push((p, None));
+        roots.push((p.into(), None));
         return Ok(());
     }
     if let Some(s) = v.as_string() {
@@ -401,18 +421,20 @@ pub fn drv_roots(
             match c {
                 Ctx::Built { drv, output } => {
                     let (layers, root) = runtime::split_built(drv);
-                    if !layers.is_empty() {
-                        return Err(bad(
-                            "iets: the output of a dynamic derivation is not an installable"
-                                .to_string(),
-                        ));
-                    }
+                    let drv = DerivedPath {
+                        root: parse_drv(root)?,
+                        chain: layers
+                            .into_iter()
+                            .rev()
+                            .map(|n| String::from_utf8_lossy(n).into_owned())
+                            .collect(),
+                    };
                     let out = String::from_utf8_lossy(output).into_owned();
-                    roots.push((parse_drv(root)?, Some(out)));
+                    roots.push((drv, Some(out)));
                     found = true;
                 }
                 Ctx::DrvDeep(drv) => {
-                    roots.push((parse_drv(drv)?, None));
+                    roots.push((parse_drv(drv)?.into(), None));
                     found = true;
                 }
                 Ctx::Opaque(_) | Ctx::Impure(_) => {}
@@ -428,7 +450,7 @@ pub fn drv_roots(
     }
     if let Some(l) = v.as_list() {
         for c in l.cells() {
-            drv_roots(ev, c.get(), roots)?;
+            derived_roots(ev, c.get(), roots)?;
         }
         return Ok(());
     }
@@ -446,11 +468,11 @@ pub fn roots_of(
     v: Word,
     args: Word,
     attr: &str,
-    roots: &mut Vec<(StorePath, Option<String>)>,
+    roots: &mut Vec<(DerivedPath, Option<String>)>,
 ) -> EvalResult<()> {
     let v = ev.auto_call(v, args)?;
     let Some(tree) = v.as_attrs().filter(|a| a.get(ev.s.drv_path).is_none()) else {
-        return drv_roots(ev, v, roots);
+        return derived_roots(ev, v, roots);
     };
     let system = ev.current_system();
     let sym = ev.sym(system.as_bytes());
@@ -570,7 +592,10 @@ fn one_derivation(
     }
     ev.drv.set_attr(&drv, attr);
     if seen.insert((drv.to_string(), output.clone())) {
-        out.push(Root { drv, output });
+        out.push(Root {
+            drv: drv.into(),
+            output,
+        });
     }
     Ok(true)
 }
@@ -675,7 +700,7 @@ fn main_program(ev: &mut Evaluator, attrs: &'static AttrsObj) -> EvalResult<Opti
 
 /// One installable's derivation and the outputs it installs.
 pub struct Install {
-    pub drv: StorePath,
+    pub drv: DerivedPath,
     pub outputs: Vec<String>,
 }
 
@@ -707,6 +732,23 @@ pub fn to_derivation(ev: &mut Evaluator, v: Word, what: &str) -> EvalResult<Stor
 /// the installable in the error a non-derivation gets.
 pub fn to_install(ev: &mut Evaluator, v: Word, what: &str, flake: bool) -> EvalResult<Install> {
     let v = ev.force(v)?;
+    if let Some(s) = v.as_string()
+        && s.ctx.iter().any(|c| matches!(c, Ctx::Built { .. }))
+    {
+        let mut roots = Vec::new();
+        derived_roots(ev, v, &mut roots)?;
+        if let [(drv, Some(output))] = roots.as_slice() {
+            return Ok(Install {
+                drv: drv.clone(),
+                outputs: vec![output.clone()],
+            });
+        }
+        return Err(Error::boxed(
+            ErrorKind::Eval,
+            "a string installable must name exactly one derivation output",
+            Pos::NONE,
+        ));
+    }
     let unsupported = |msg: String| Error::boxed(ErrorKind::Unsupported, msg, Pos::NONE);
     let not_a_drv = || unsupported(format!("the installable '{what}' is not a derivation"));
     let Some(attrs) = v.as_attrs() else {
@@ -715,7 +757,7 @@ pub fn to_install(ev: &mut Evaluator, v: Word, what: &str, flake: bool) -> EvalR
     if !is_derivation(ev, attrs)? {
         return Err(not_a_drv());
     }
-    let drv = drv_of(ev, attrs)?;
+    let drv: DerivedPath = drv_of(ev, attrs)?.into();
 
     let specified_sym = ev.sym(b"outputSpecified");
     let specified = match attrs.get(specified_sym) {

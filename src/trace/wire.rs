@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use super::{Digest32, Filtered, Kind, Obs, Query};
 use crate::builtins::derivation::DrvInfo;
+use crate::store::derived::DerivedPath;
 use crate::store::hash::{Hash, HashAlgo};
 use crate::store::narinfo::{Fetched, NarInfo};
 use crate::store::path::StorePath;
@@ -583,22 +584,37 @@ pub fn decode_sources(b: &[u8]) -> Option<HashMap<StorePath, SourceOrigin>> {
 }
 
 /// The roots `iets build` resolved: drv path and the output named by context.
-pub fn encode_roots(roots: &[(StorePath, Option<String>)]) -> Vec<u8> {
+pub fn encode_roots(roots: &[(DerivedPath, Option<String>)]) -> Vec<u8> {
     let mut e = Enc::new();
+    // Separate from old root tuples without invalidating other cache parts.
+    e.u64(u64::MAX);
     e.u64(roots.len() as u64);
     for (p, out) in roots {
         e.bytes(p.base_name().as_bytes());
+        e.u64(p.chain.len() as u64);
+        for output in &p.chain {
+            e.bytes(output.as_bytes());
+        }
         e.opt_bytes(out.as_deref().map(str::as_bytes));
     }
     e.0
 }
 
-pub fn decode_roots(b: &[u8]) -> Option<Vec<(StorePath, Option<String>)>> {
+pub fn decode_roots(b: &[u8]) -> Option<Vec<(DerivedPath, Option<String>)>> {
     let mut d = Dec::new(b).ok()?;
+    if d.u64().ok()? != u64::MAX {
+        return None;
+    }
     let n = d.u64().ok()? as usize;
     let mut v = Vec::with_capacity(n.min(1 << 16));
     for _ in 0..n {
         let p = store_path(d.bytes().ok()?).ok()?;
+        let count = usize::try_from(d.u64().ok()?).ok()?;
+        let mut chain = Vec::new();
+        for _ in 0..count {
+            chain.push(String::from_utf8(d.bytes().ok()?.to_vec()).ok()?);
+        }
+        let p = DerivedPath { root: p, chain };
         let out = match d.opt_vec().ok()? {
             Some(o) => Some(String::from_utf8(o).ok()?),
             None => None,
@@ -748,7 +764,17 @@ mod tests {
         assert_eq!((o.at.rel.as_slice(), o.nar), (&b"lib"[..], Some((hash, 7))));
         assert!(o.at.accepts(Path::new("/lib")) && !o.at.accepts(Path::new("/lib/x")));
 
-        let roots = vec![(p.clone(), Some("out".to_string())), (p, None)];
+        let roots = vec![
+            (p.clone().into(), Some("out".to_string())),
+            (
+                DerivedPath {
+                    root: p.clone(),
+                    chain: vec!["drv".into(), "nested".into()],
+                },
+                Some("dev".into()),
+            ),
+            (p.into(), None),
+        ];
         assert_eq!(decode_roots(&encode_roots(&roots)).unwrap(), roots);
     }
 }
