@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Measure UPM application recompilation with cached external dependencies.
+"""Measure UPM source-change builds in a prewarmed store.
 
 Each trial gets a fresh source snapshot with an equal-length Go comment added
 to every local Go file. This invalidates UPM packages without deleting store
-objects. It is not a cold toolchain/dependency benchmark.
+objects. Some external cgo packages may also rebuild; it is not a cold-store
+benchmark or an isolated measurement of the compiler.
 """
 import argparse
 import json
@@ -56,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix="upm-compile-") as tmp:
             results.append(dict(client=client, trial=trial, seconds=elapsed,
                                 output=output, command=cmd, help_exit=smoke.returncode))
             a.output.write_text(json.dumps({
-                "note": "Local UPM package recompilation plus planning/evaluation/database/wrapping; external dependencies cached.",
+                "note": "Fresh UPM source snapshots in a prewarmed store; includes planning, evaluation, compilation (including invalidated cgo dependencies), database generation and wrapping.",
                 "samples": results,
             }, indent=2) + "\n")
             print(client, trial, elapsed, flush=True)

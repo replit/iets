@@ -49,7 +49,7 @@ iets requires. Both clients must receive the same argument.
 `bench/dynamic-upm.py` alternates evaluation and warm realization runs, checks
 that both clients return the same paths, and records every sample.
 `bench/dynamic-upm-compile.py` measures application recompilation by adding a
-fresh comment to local Go sources for each trial. External dependencies stay
-cached. This includes planning, evaluation, local package compilation, database
-generation and wrapping; it is not a cold dependency build or a measurement of
-a different Go compiler.
+fresh comment to local Go sources for each trial in a prewarmed store.
+External cgo dependencies can also rebuild. This includes planning, evaluation,
+compilation, database generation and wrapping; it is not a cold dependency
+build or a measurement of a different Go compiler.
