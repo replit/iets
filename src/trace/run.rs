@@ -13,6 +13,7 @@ use crate::eval::Evaluator;
 use crate::ignored;
 use crate::log;
 use crate::session::Session;
+use crate::store::derived::DerivedPath;
 use crate::store::narinfo::Fetched;
 use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
@@ -23,7 +24,7 @@ use crate::trace::{validate, wire};
 
 /// What a `build` entry holds besides its read set.
 pub struct BuildTables {
-    pub roots: Vec<(StorePath, Option<String>)>,
+    pub roots: Vec<(DerivedPath, Option<String>)>,
     pub drvs: FxHashMap<StorePath, DrvInfo>,
     pub sources: HashMap<StorePath, SourceOrigin>,
     pub fetched: HashMap<StorePath, Arc<Fetched>>,
@@ -231,7 +232,7 @@ impl Cache {
 
     /// [`Cache::write`] for a command that builds: `roots` is the result, and
     /// the tables go with it, for [`Cache::read_build`].
-    pub fn write_build(&self, ev: &Evaluator, roots: &[(StorePath, Option<String>)]) {
+    pub fn write_build(&self, ev: &Evaluator, roots: &[(DerivedPath, Option<String>)]) {
         self.write(ev, &wire::encode_roots(roots), true);
     }
 

@@ -19,6 +19,7 @@ use crate::provenance::Provenance;
 use crate::remote::plan;
 use crate::remote::worker::Missing;
 use crate::settings;
+pub use crate::store::derived::DerivedPath;
 use crate::store::locate::locate_in_store;
 use crate::store::path::StorePath;
 use crate::store::source::SourceOrigin;
@@ -34,13 +35,13 @@ use crate::store::drv::Derivation;
 /// One derivation and one of its outputs a command asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Root {
-    pub drv: StorePath,
+    pub drv: DerivedPath,
     pub output: String,
 }
 
 impl Root {
     pub fn paths(roots: &[Root]) -> Vec<StorePath> {
-        roots.iter().map(|r| r.drv.clone()).collect()
+        roots.iter().map(|r| r.drv.root.clone()).collect()
     }
 }
 

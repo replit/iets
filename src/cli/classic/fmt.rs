@@ -191,7 +191,7 @@ fn resolve(ev: &mut Evaluator, fr: &FlakeRef, attr: &str) -> error::Result<Resol
     )?;
     let app = installable::to_app(ev, found.remove(0).value, attr)?;
     let roots = vec![Root {
-        drv: app.drv.clone(),
+        drv: app.drv.clone().into(),
         output: app.output.clone(),
     }];
     let plan = build::plan(ev, &Root::paths(&roots))?;
@@ -211,7 +211,7 @@ fn realise(
     options: &Options,
 ) -> error::Result<i32> {
     let roots = vec![Root {
-        drv: app.drv.clone(),
+        drv: app.drv.clone().into(),
         output: app.output.clone(),
     }];
     let style = Style {

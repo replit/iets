@@ -245,14 +245,14 @@ fn build_once(argv: &[String]) -> i32 {
                 t0.elapsed().as_secs_f64()
             );
         }
-        let (root_paths, outputs) = build_targets(&b.outputs, &roots);
+        let targets = build_targets(&b.outputs, &roots);
         let prov = Provenance::from_map(SourceMap::from_sources(&sources));
         let inputs = Inputs {
             drvs: &drvs,
             sources: &sources,
             fetched: &fetched,
         };
-        Some(build_roots(&b, &root_paths, &outputs, inputs, &prov))
+        Some(build_roots(&b, targets, inputs, &prov))
     }) {
         return code;
     }
@@ -260,7 +260,7 @@ fn build_once(argv: &[String]) -> i32 {
     cli::run_parallel(run, move |ev, cache| build_eval(ev, &b, all, t0, cache))
 }
 
-type Roots = Vec<(StorePath, Option<String>)>;
+type Roots = Vec<(apibuild::DerivedPath, Option<String>)>;
 
 /// The roots of every installable, loading each flake once.
 fn resolve_all(ev: &mut Evaluator, all: Vec<EvalArgs>) -> Result<Roots, Box<eval::Error>> {
@@ -323,7 +323,7 @@ fn build_eval(
     if let Some(c) = &cache {
         c.write(ev, &wire::encode_roots(&roots), true);
     }
-    let (root_paths, outputs) = build_targets(&b.outputs, &roots);
+    let targets = build_targets(&b.outputs, &roots);
     let prov = Provenance::snapshot(ev);
     let drvs = ev.drv.drvs.lock();
     let sources = ev.known.origins();
@@ -333,7 +333,7 @@ fn build_eval(
         sources: &sources,
         fetched: &fetched,
     };
-    build_roots(b, &root_paths, &outputs, inputs, &prov)
+    build_roots(b, targets, inputs, &prov)
 }
 
 /// Legacy mode: `DRV` is a `.drv` store path, or a copy of the file named
@@ -366,8 +366,7 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
     let prov = Provenance::from_map(SourceMap::from_sources(&sources));
     build_roots(
         b,
-        &[root],
-        &b.outputs,
+        vec![Target::new("", root, b.outputs.clone())],
         Inputs {
             drvs: &drvs,
             sources: &sources,
@@ -379,11 +378,12 @@ fn build_drv_file(b: &BuildArgs, root_arg: &str) -> i32 {
 
 fn build_roots(
     b: &BuildArgs,
-    roots: &[StorePath],
-    outputs: &[String],
+    mut targets: Vec<Target>,
     inputs: Inputs<'_>,
     prov: &Provenance,
 ) -> i32 {
+    let root_paths: Vec<StorePath> = targets.iter().map(|t| t.drv.root.clone()).collect();
+    let roots = root_paths.as_slice();
     if roots.is_empty() {
         return no_output("nothing to build: the expression has no derivation in it");
     }
@@ -423,16 +423,12 @@ fn build_roots(
         return 0;
     }
 
-    let targets: Vec<Target> = roots
-        .iter()
-        .map(|r| {
-            // The bare attribute: the dispatcher adds the position, once.
-            let name = (inputs.drvs.get(r))
-                .and_then(|i| i.attr.clone())
-                .unwrap_or_else(|| drv_name(&r.to_string()).to_string());
-            Target::new(&name, r.clone(), outputs.to_vec())
-        })
-        .collect();
+    for target in &mut targets {
+        let r = &target.drv.root;
+        target.attr = (inputs.drvs.get(r))
+            .and_then(|i| i.attr.clone())
+            .unwrap_or_else(|| drv_name(&r.to_string()).to_string());
+    }
     if b.dry_run {
         return match d.missing(&targets) {
             Ok(m) => print_missing(&m, d.plan(), b.json),
@@ -475,7 +471,7 @@ fn build_roots(
         text::built(&report);
     }
     render::emit(&report, b.json);
-    match silence(&outcomes, outputs) {
+    match silence(&outcomes, &b.outputs) {
         Some(why) => log::combine_exit(d.d.exit, no_output(&why)),
         None => d.d.exit,
     }
@@ -584,7 +580,9 @@ mod tests {
     fn outcome(success: bool, skipped: bool, outputs: &[&str]) -> Outcome {
         Outcome {
             attr: "top".into(),
-            drv: StorePath::parse("/nix/store/00000000000000000000000000000000-top.drv").unwrap(),
+            drv: StorePath::parse("/nix/store/00000000000000000000000000000000-top.drv")
+                .unwrap()
+                .into(),
             success,
             skipped,
             reason: skipped.then(|| "the builder returned no build result".to_string()),

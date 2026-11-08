@@ -81,6 +81,9 @@ fn build_batch(
     batch: &Batch<'_>,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<HashMap<String, Status>> {
+    if batch.jobs.iter().any(|j| !j.drv.chain.is_empty()) {
+        return Err(Error::Usage("dynamic derivation installables need a worker-protocol builder; gRPC does not support them".into()));
+    }
     let mut out: HashMap<String, Status> = batch
         .jobs
         .iter()
@@ -90,7 +93,7 @@ fn build_batch(
         .jobs
         .iter()
         .map(|j| {
-            drvs.get_key_value(&j.drv)
+            drvs.get_key_value(&j.drv.root)
                 .map(|(k, _)| (k, j.outputs.as_slice()))
                 .ok_or_else(|| Error::Plan(format!("'{}' is not in the batch's closure", j.drv)))
         })
@@ -338,7 +341,16 @@ impl Backend for Grpc {
             on_event,
         );
         self.t.common.build += t0.elapsed();
-        r
+        let statuses = r?;
+        Ok(batch
+            .jobs
+            .iter()
+            .filter_map(|job| {
+                statuses
+                    .get(&job.drv.to_string())
+                    .map(|status| (job.key(), status.clone()))
+            })
+            .collect())
     }
 
     fn outputs(
@@ -348,7 +360,7 @@ impl Backend for Grpc {
     ) -> Result<BTreeMap<String, Option<String>>> {
         let _ = on_event;
         let t0 = Instant::now();
-        let path = StorePath::parse(drv)?;
+        let path = StorePath::parse(drv.split('!').next().unwrap())?;
         let d = self
             .drvs
             .get(&path)

@@ -287,14 +287,14 @@ fn prepare(ev: &mut Evaluator, s: &Shell) -> error::Result<Box<Ready>> {
     let mut targets = vec![roots[0].clone()];
     if let Bash::Drv(p) = &bash {
         targets.push(Root {
-            drv: p.clone(),
+            drv: p.clone().into(),
             output: "out".into(),
         });
     }
     key.extend(s.c.flags.attrs.iter().map(|a| a.as_bytes().to_vec()));
     let plan = apibuild::plan(ev, &Root::paths(&targets))?;
     Ok(Box::new(Ready {
-        drv_path: roots[0].drv.clone(),
+        drv_path: roots[0].drv.root.clone(),
         drv,
         bash,
         plan,
@@ -315,7 +315,7 @@ fn bash(ev: &mut Evaluator, cwd: &[u8]) -> Bash {
         installable::get_drvs(ev, v, empty, &mut roots, &mut HashSet::new())
     })();
     match r {
-        Ok(()) if roots.len() == 1 => Bash::Drv(roots[0].drv.clone()),
+        Ok(()) if roots.len() == 1 => Bash::Drv(roots[0].drv.root.clone()),
         Ok(()) => {
             let msg =
                 "the 'bashInteractive' attribute in <nixpkgs> did not evaluate to a derivation";

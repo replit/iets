@@ -162,6 +162,14 @@ every derivation in it gets built. So `iets build .#checks` builds all the
 checks. The walk is `nix-build`'s: names in order, a nested set only with
 `recurseForDerivations = true`, and a list always.
 
+Strings returned by `builtins.outputOf` can be built directly, including
+nested dynamic derivations. Each target keeps its own output selection.
+The worker-protocol builder resolves the chain at build time; evaluation
+does not build anything, and `--no-build` only uploads the concrete
+producer's closure. `--dry-run` asks the daemon without realising the
+chain. The same strings work with the modern `nix build` compatibility
+command. The gRPC transport does not support dynamic installables.
+
 In a set that has a member named after your system, iets goes into that
 member first. That is how a flake lays out `checks`,
 `packages` and `devShells`. To build for another system, name it in full:

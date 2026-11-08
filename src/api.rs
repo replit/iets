@@ -20,6 +20,8 @@ pub mod testkit;
 pub mod value;
 pub mod watch;
 
+use crate::api::build::DerivedPath;
+use crate::build::Target;
 use crate::compile::cache::IrCache;
 use crate::env::Env;
 use crate::eval::{self, Error, ErrorKind, EvalConfig, Evaluator, Pos, search_path};
@@ -29,7 +31,6 @@ use crate::provenance::{describe_pos, rewrite_msg};
 use crate::runtime::Word;
 use crate::session::Session;
 use crate::source::nix_conf;
-use crate::store::path::StorePath;
 use crate::sys::{self, OsStringExt};
 use crate::trace::key::{Key, has_relative_path};
 use crate::trace::run::Cache;
@@ -438,19 +439,19 @@ pub fn full_includes(includes: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)>
 
 /// The derivations to build and the outputs to print: `wanted` plus the
 /// outputs the roots' string context named.
-pub fn build_targets(
-    wanted: &[String],
-    roots: &[(StorePath, Option<String>)],
-) -> (Vec<StorePath>, Vec<String>) {
-    let mut outputs = wanted.to_vec();
-    for (_, out) in roots {
-        if let Some(o) = out
-            && !outputs.contains(o)
-        {
-            outputs.push(o.clone());
-        }
-    }
-    (roots.iter().map(|(p, _)| p.clone()).collect(), outputs)
+pub fn build_targets(wanted: &[String], roots: &[(DerivedPath, Option<String>)]) -> Vec<Target> {
+    roots
+        .iter()
+        .map(|(drv, output)| {
+            let mut outputs = wanted.to_vec();
+            if let Some(output) = output
+                && !outputs.contains(output)
+            {
+                outputs.push(output.clone());
+            }
+            Target::new("", drv.clone(), outputs)
+        })
+        .collect()
 }
 
 /// The tracing cache for this run, keyed on the eval arguments. `None` when the
