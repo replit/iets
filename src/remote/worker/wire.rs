@@ -222,7 +222,7 @@ pub fn drv_output(s: &str) -> io::Result<()> {
 
 /// `common-protocol.cc:Serialise<Realisation>`: the JSON of realisation.cc,
 /// `outPath` a store path's base name, `signatures` if there, and `id`.
-pub fn realisation(raw: &[u8]) -> io::Result<()> {
+pub fn realisation(raw: &[u8]) -> io::Result<StorePath> {
     let bad_json = |why: &str| bad(&format!("while parsing a realisation object: {why}"));
     let v: serde_json::Value = serde_json::from_slice(raw).map_err(|e| bad_json(&e.to_string()))?;
     let o = v.as_object().ok_or_else(|| bad_json("not an object"))?;
@@ -232,7 +232,7 @@ pub fn realisation(raw: &[u8]) -> io::Result<()> {
             .as_str()
             .ok_or_else(|| bad_json(&format!("'{key}' is not a string")))
     };
-    StorePath::from_base_name(string("outPath")?).map_err(|e| bad(&e.to_string()))?;
+    let path = StorePath::from_base_name(string("outPath")?).map_err(|e| bad(&e.to_string()))?;
     if let Some(sigs) = o.get("signatures") {
         for s in sigs
             .as_array()
@@ -244,7 +244,8 @@ pub fn realisation(raw: &[u8]) -> io::Result<()> {
             )?;
         }
     }
-    drv_output(string("id")?)
+    drv_output(string("id")?)?;
+    Ok(path)
 }
 
 /// Mirrors serialise.hh:FramedSink: the payload of `AddMultipleToStore` goes out as

@@ -230,6 +230,12 @@ pub fn basic_input_srcs(
 ) -> Result<BTreeSet<StorePath>> {
     let mut srcs = drv.input_srcs.clone();
     for (dep, node) in &drv.input_drvs {
+        if !node.children.is_empty() {
+            return Err(Error::Plan(format!(
+                "'{drv_path}': input '{dep}' contains dynamic derivations; \
+                 use a worker-protocol builder to resolve generated inputs"
+            )));
+        }
         for o in &node.outputs {
             let Some(p) = output_of(dep, o) else {
                 return Err(Error::Plan(format!(
@@ -246,12 +252,27 @@ pub fn basic_input_srcs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::drv::Derivation;
+    use crate::store::drv::{Derivation, InputNode};
 
     const ATERM: &str = r#"Derive([("out","/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo","","")],[("/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-dep.drv",["out"])],["/nix/store/cccccccccccccccccccccccccccccccc-src"],"x86_64-linux","/bin/sh",["-c","true"],[("__json","{\"a\":1}"),("out","/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo"),("zz","last")])"#;
 
     fn fixture() -> Derivation {
         Derivation::parse(ATERM.as_bytes(), "foo").unwrap()
+    }
+
+    #[test]
+    fn dynamic_inputs_are_not_silently_dropped() {
+        let mut drv = fixture();
+        let node = drv.input_drvs.values_mut().next().unwrap();
+        node.outputs.clear();
+        node.children
+            .insert("out".into(), InputNode::of(BTreeSet::from(["out".into()])));
+        let path = StorePath::parse("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo.drv").unwrap();
+        let err = basic_input_srcs(&path, &drv, &|_, _| {
+            panic!("a dynamic input must not be resolved as a static one")
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("worker-protocol builder"));
     }
 
     /// Reproduces `derivation::write` by hand: the field order and the empty

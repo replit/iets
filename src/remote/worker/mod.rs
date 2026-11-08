@@ -484,6 +484,8 @@ pub struct BuildResult {
     pub path: String,
     pub status: u64,
     pub msg: String,
+    /// Resolved paths, including outputs of deferred derivations.
+    pub outputs: BTreeMap<String, Option<String>>,
 }
 
 impl BuildResult {
@@ -1119,11 +1121,21 @@ impl Connection {
         }
         let r = self.r();
         let outputs = read_u64(r)?;
+        let mut built_outputs = BTreeMap::new();
         for _ in 0..outputs {
-            wire::drv_output(&read_str(r)?).map_err(conn)?;
-            wire::realisation(&wire::read_bytes(r, wire::MAX_STRING)?).map_err(conn)?;
+            let id = read_str(r)?;
+            wire::drv_output(&id).map_err(conn)?;
+            let name = id.split_once('!').expect("validated output id").1;
+            check_name(name).map_err(|e| Error::Protocol(e.to_string()))?;
+            let path = wire::realisation(&wire::read_bytes(r, wire::MAX_STRING)?).map_err(conn)?;
+            built_outputs.insert(name.to_string(), Some(path.to_string()));
         }
-        Ok(BuildResult { path, status, msg })
+        Ok(BuildResult {
+            path,
+            status,
+            msg,
+            outputs: built_outputs,
+        })
     }
 
     /// `QueryMissing`; `paths` are derived paths, as for `BuildPathsWithResults`.
@@ -1314,6 +1326,7 @@ mod tests {
             path: String::new(),
             status,
             msg: String::new(),
+            outputs: BTreeMap::new(),
         };
         assert!(r(0).success() && r(13).success());
         assert!(!r(256).success() && !r(269).success() && !r(3).success());

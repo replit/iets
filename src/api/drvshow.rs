@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 use crate::eval::Evaluator;
 use crate::print;
 use crate::remote::plan::{load_drv, walk};
-use crate::store::drv::{Derivation, DerivationOutput};
+use crate::store::drv::{Derivation, DerivationOutput, InputNode};
 use crate::store::path::{IngestionMethod, StorePath};
 use crate::syntax::symbol::FxHashMap;
 
@@ -187,7 +187,7 @@ fn inputs(drv: &Derivation) -> Value {
         "drvs".into(),
         Value::Object(
             (drv.input_drvs.iter())
-                .map(|(p, node)| (p.base_name().to_string(), input_drv(&node.outputs)))
+                .map(|(p, node)| (p.base_name().to_string(), input_drv(node)))
                 .collect(),
         ),
     );
@@ -195,14 +195,26 @@ fn inputs(drv: &Derivation) -> Value {
     Value::Object(o)
 }
 
-/// One `inputDrvs` entry. `dynamicOutputs` is always empty: iets refuses a
-/// dynamic-derivation input when it parses the ATerm.
-fn input_drv(outputs: &BTreeSet<String>) -> Value {
+/// Keep each layer of generated derivations, not just the static outputs.
+fn input_drv(node: &InputNode) -> Value {
     let mut o = Map::new();
-    o.insert("dynamicOutputs".into(), Value::Object(Map::new()));
+    o.insert(
+        "dynamicOutputs".into(),
+        Value::Object(
+            node.children
+                .iter()
+                .map(|(name, child)| (name.clone(), input_drv(child)))
+                .collect(),
+        ),
+    );
     o.insert(
         "outputs".into(),
-        Value::Array(outputs.iter().map(|s| Value::from(s.as_str())).collect()),
+        Value::Array(
+            node.outputs
+                .iter()
+                .map(|s| Value::from(s.as_str()))
+                .collect(),
+        ),
     );
     Value::Object(o)
 }
@@ -256,10 +268,38 @@ fn paths(v: &BTreeSet<StorePath>) -> Value {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::collections::BTreeMap;
 
     fn json_of(aterm: &str, name: &str) -> String {
         let drv = Derivation::parse(aterm.as_bytes(), name).unwrap();
         derivation(&drv).unwrap().to_string()
+    }
+
+    #[test]
+    fn dynamic_inputs_preserve_every_layer_and_static_outputs() {
+        let leaf = InputNode::of(BTreeSet::from(["bin".into(), "dev".into()]));
+        let nested = InputNode {
+            outputs: BTreeSet::from(["log".into()]),
+            children: BTreeMap::from([("drv".into(), leaf)]),
+        };
+        let root = InputNode {
+            outputs: BTreeSet::from(["out".into()]),
+            children: BTreeMap::from([("generated".into(), nested)]),
+        };
+        assert_eq!(
+            input_drv(&root),
+            serde_json::json!({
+                "outputs": ["out"],
+                "dynamicOutputs": {
+                    "generated": {
+                        "outputs": ["log"],
+                        "dynamicOutputs": {
+                            "drv": {"outputs": ["bin", "dev"], "dynamicOutputs": {}}
+                        }
+                    }
+                }
+            })
+        );
     }
 
     #[rstest]
