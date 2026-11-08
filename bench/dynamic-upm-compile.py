@@ -37,10 +37,10 @@ with tempfile.TemporaryDirectory(prefix="upm-compile-") as tmp:
             for path in src.rglob("*.go"):
                 path.chmod(0o644)
                 with path.open("a") as f:
-                    f.write(f"\n// benchmark {trial:03d} {client:11s}\n")
+                    f.write(f"\n// benchmark {pathlib.Path(tmp).name} {trial:03d} {client:11s}\n")
             expr = f'(import ./examples/upm/dynamic.nix {{ source = {src}; }}).package'
             cmd = ([a.iets, "build", "--impure", "--no-tracing-cache", "--workers", "1"]
-                   if client == "iets" else ["nix-build", "--no-out-link"])
+                   if client == "iets" else ["nix-build", "--no-out-link", "--max-jobs", "4", "--cores", "0"])
             cmd += ["-E", expr]
             start = time.perf_counter()
             r = subprocess.run(cmd, cwd=a.drvgo, env=env, text=True, capture_output=True)
