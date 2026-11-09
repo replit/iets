@@ -10,7 +10,6 @@
 //! its frames to a bounded queue, the caller's thread reads that queue through
 //! the decompressor, and both ends stop when the other does.
 
-use std::cell::Cell;
 use std::error::Error as StdError;
 use std::fmt::{self, Display, Formatter};
 use std::fs::File;
@@ -19,7 +18,7 @@ use std::future::Future;
 use std::io::Cursor;
 use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
 use std::pin::Pin;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -393,8 +392,9 @@ pub fn put(
     decompress: bool,
     sink: &mut dyn Write,
 ) -> Result<u64> {
-    let read_in = Rc::new(Cell::new(0));
-    let raw: Box<dyn Read> = Box::new(Counted(Box::new(io::Cursor::new(bytes)), read_in.clone()));
+    let read_in = Arc::new(AtomicU64::new(0));
+    let raw: Box<dyn Read + Send> =
+        Box::new(Counted(Box::new(io::Cursor::new(bytes)), read_in.clone()));
     let read = if decompress {
         decompress_reader(raw, layers_budget(limits.max_size))?
     } else {
@@ -535,7 +535,7 @@ fn request(
     decompress: bool,
     sink: &mut dyn Write,
 ) -> Result<u64> {
-    let undo = |r: Box<dyn Read>| {
+    let undo = |r: Box<dyn Read + Send>| {
         if decompress {
             decompress_reader(r, layers_budget(limits.max_size))
         } else {
@@ -547,7 +547,7 @@ fn request(
             "cannot fetch '{url}': IETS_OFFLINE is set"
         )));
     }
-    let read_in = Rc::new(Cell::new(0));
+    let read_in = Arc::new(AtomicU64::new(0));
     if let Some(path) = local_path(url).filter(|_| body.is_none()) {
         let file = File::open(sys::path_from_internal(path.as_bytes()))
             .map_err(|e| Error::io(format!("cannot read '{path}'"), e))?;
@@ -605,12 +605,12 @@ impl Read for Queued {
 
 /// A reader that adds what it reads to a counter: the compressed side, for the
 /// ratio [`drain`] checks.
-struct Counted(Box<dyn Read>, Rc<Cell<u64>>);
+struct Counted(Box<dyn Read + Send>, Arc<AtomicU64>);
 
 impl Read for Counted {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.0.read(buf)?;
-        self.1.set(self.1.get() + n as u64);
+        self.1.fetch_add(n as u64, Ordering::Relaxed);
         Ok(n)
     }
 }
@@ -620,7 +620,7 @@ impl Read for Counted {
 fn drain(
     url: &str,
     mut read: Box<dyn Read>,
-    read_in: &Cell<u64>,
+    read_in: &AtomicU64,
     limits: Limits,
     sink: &mut dyn Write,
 ) -> Result<u64> {
@@ -640,7 +640,12 @@ fn drain(
             told = Instant::now();
             act.result(
                 RES_PROGRESS,
-                vec![read_in.get().into(), 0.into(), 0.into(), 0.into()],
+                vec![
+                    read_in.load(Ordering::Relaxed).into(),
+                    0.into(),
+                    0.into(),
+                    0.into(),
+                ],
             );
         }
         let n = match read.read(&mut buf) {
@@ -654,7 +659,7 @@ fn drain(
             let why = format!("over the fetch-max-size of {} bytes", limits.max_size);
             return Err(bad(url, &why));
         }
-        if out > RATIO_AFTER && out / read_in.get().max(1) > MAX_RATIO {
+        if out > RATIO_AFTER && out / read_in.load(Ordering::Relaxed).max(1) > MAX_RATIO {
             let why = format!("it decompresses over {MAX_RATIO} times its size");
             return Err(bad(url, &why));
         }
@@ -874,7 +879,7 @@ impl Compression {
 struct Sniffed {
     head: Vec<u8>,
     pos: usize,
-    rest: Box<dyn Read>,
+    rest: Box<dyn Read + Send>,
 }
 
 impl Read for Sniffed {
@@ -894,7 +899,7 @@ impl Read for Sniffed {
 /// libarchive's filter bids on the bytes and, finding no filter, hands the rest
 /// to the tar reader, which stops at its own end-of-archive marker.
 struct MultiGz {
-    at: flate2::bufread::GzDecoder<BufReader<Box<dyn Read>>>,
+    at: flate2::bufread::GzDecoder<BufReader<Box<dyn Read + Send>>>,
 }
 
 impl Read for MultiGz {
@@ -929,17 +934,21 @@ fn layers_budget(max_size: u64) -> u64 {
 /// work of a layer that outputs little, such as a run of empty gzip members,
 /// is bounded too.
 struct Charged {
-    inner: Box<dyn Read>,
-    left: Rc<Cell<u64>>,
+    inner: Box<dyn Read + Send>,
+    left: Arc<AtomicU64>,
 }
 
 impl Read for Charged {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
-        let left = self.left.get().checked_sub(n as u64).ok_or_else(|| {
-            io::Error::other("the archive's layers of compression decompress to too much")
-        })?;
-        self.left.set(left);
+        let left = self
+            .left
+            .load(Ordering::Relaxed)
+            .checked_sub(n as u64)
+            .ok_or_else(|| {
+                io::Error::other("the archive's layers of compression decompress to too much")
+            })?;
+        self.left.store(left, Ordering::Relaxed);
         Ok(n)
     }
 }
@@ -948,8 +957,8 @@ impl Read for Charged {
 /// `archive_read_support_filter_all` does it, without holding the stream. A
 /// filter's own output is sniffed again, so a doubly compressed archive
 /// unpacks. What the layers read together may not exceed `budget`.
-pub fn decompress_reader(read: Box<dyn Read>, budget: u64) -> Result<Box<dyn Read>> {
-    let left = Rc::new(Cell::new(budget));
+pub fn decompress_reader(read: Box<dyn Read + Send>, budget: u64) -> Result<Box<dyn Read + Send>> {
+    let left = Arc::new(AtomicU64::new(budget));
     let mut read = read;
     for _ in 0..MAX_FILTERS {
         read = Box::new(Charged {
@@ -971,7 +980,7 @@ pub fn decompress_reader(read: Box<dyn Read>, budget: u64) -> Result<Box<dyn Rea
             head: head[..n].to_vec(),
             pos: 0,
             rest: read,
-        }) as Box<dyn Read>;
+        }) as Box<dyn Read + Send>;
         read = match kind {
             Compression::None => return Ok(src),
             Compression::Gzip => Box::new(MultiGz {

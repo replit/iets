@@ -56,7 +56,12 @@ pub fn objects(missing: &[Arc<Fetched>]) -> Result<Vec<Object>> {
 }
 
 /// Writes one path to a connection, calling the hook before its last byte.
-pub type Add<C> = dyn Fn(&mut C, &Fetched, &mut dyn Read, &mut dyn FnMut() -> io::Result<()>) -> Result<u64>
+pub type Add<C> = dyn Fn(
+        &mut C,
+        &Fetched,
+        &mut (dyn Read + Send),
+        &mut (dyn FnMut() -> io::Result<()> + Send),
+    ) -> Result<u64>
     + Sync;
 
 struct Slot {
@@ -240,7 +245,7 @@ pub fn send<C>(
 fn streamed(
     f: &Fetched,
     limits: Limits,
-    use_: impl FnOnce(&mut dyn Read) -> Result<u64>,
+    use_: impl FnOnce(&mut (dyn Read + Send)) -> Result<u64>,
 ) -> Result<u64> {
     let url = format!("{}/{}", f.store, f.info.url);
     let (r, mut w) = io::pipe().map_err(|e| Error::io("cannot create a pipe", e))?;
