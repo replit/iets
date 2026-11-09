@@ -4,13 +4,16 @@
 
 pub mod wire;
 
+use crate::session;
 use crate::sys::fs::symlink;
 use crate::sys::net::UnixStream;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, BufReader, BufWriter, Read, Write};
+#[cfg(unix)]
+use std::net::Shutdown;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::{env, fs, mem, str, thread};
+use std::{env, fs, mem, panic, str, thread};
 
 use serde_json::Value;
 
@@ -500,6 +503,8 @@ pub struct Connection {
     to: BufWriter<Counting<Box<dyn Write + Send>>>,
     from: BufReader<Box<dyn Read + Send>>,
     child: Option<Child>,
+    #[cfg(unix)]
+    upload_socket: Option<UnixStream>,
     pub minor: u64,
     pub daemon_nix_version: String,
     /// `Some(true)` when the daemon trusts us (protocol >= 1.35).
@@ -627,6 +632,8 @@ impl Connection {
         options: &Options,
         on_event: &mut dyn FnMut(Event),
     ) -> Result<Connection> {
+        #[cfg(unix)]
+        let mut upload_socket = None;
         let (to, from, child): (Box<dyn Write + Send>, Box<dyn Read + Send>, Option<Child>) =
             match transport {
                 Transport::Grpc(cfg) => {
@@ -640,6 +647,10 @@ impl Connection {
                         Error::io(format!("cannot connect to '{}'", path.display()), e)
                     })?;
                     let r = s.try_clone().map_err(conn)?;
+                    #[cfg(unix)]
+                    {
+                        upload_socket = Some(s.try_clone().map_err(conn)?);
+                    }
                     (Box::new(s), Box::new(r), None)
                 }
                 ssh @ Transport::Ssh { remote_program, .. } => {
@@ -666,6 +677,8 @@ impl Connection {
             ),
             from: BufReader::with_capacity(1 << 20, from),
             child,
+            #[cfg(unix)]
+            upload_socket,
             minor: 0,
             daemon_nix_version: String::new(),
             trusted: None,
@@ -1054,17 +1067,61 @@ impl Connection {
     pub fn add_multiple_to_store(
         &mut self,
         dont_check_sigs: bool,
-        body: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>,
+        body: &mut (dyn FnMut(&mut dyn Write) -> io::Result<()> + Send),
         on_event: &mut dyn FnMut(Event),
     ) -> Result<()> {
         self.op(Op::AddMultipleToStore)?;
         write_u64(self.w(), 0)?;
         write_u64(self.w(), u64::from(dont_check_sigs))?;
         self.flush()?;
-        let mut sink = FramedSink::new(&mut self.to);
-        body(&mut sink).map_err(conn)?;
-        sink.finish().map_err(conn)?;
-        self.process_stderr(on_event)
+        // The daemon can emit enough progress to fill its socket while waiting
+        // for another upload frame. Drain it while the sender writes, not after.
+        let mut to = mem::replace(
+            &mut self.to,
+            BufWriter::new(Counting {
+                inner: Box::new(io::sink()),
+                bytes: 0,
+            }),
+        );
+        let (sent, received) = thread::scope(|scope| {
+            let sender = scope.spawn(session::bind(|| {
+                let mut sink = FramedSink::new(&mut to);
+                let sent = panic::catch_unwind(panic::AssertUnwindSafe(|| body(&mut sink)));
+                let finished = sink.finish();
+                (sent, finished)
+            }));
+            let received =
+                panic::catch_unwind(panic::AssertUnwindSafe(|| self.process_stderr(on_event)));
+            if !matches!(received, Ok(Ok(()))) {
+                // Unblock a sender inside write_all, even if the daemon keeps
+                // its connection open after rejecting the request.
+                #[cfg(unix)]
+                if let Some(socket) = &self.upload_socket {
+                    let _ = socket.shutdown(Shutdown::Write);
+                }
+                if let Some(child) = &mut self.child {
+                    let _ = child.kill();
+                }
+            }
+            (sender.join(), received)
+        });
+        self.to = to;
+        self.sync_stats();
+        let (sent, finished) = sent.unwrap_or_else(|p| panic::resume_unwind(p));
+        let sent = sent.unwrap_or_else(|p| panic::resume_unwind(p));
+        let received = received.unwrap_or_else(|p| panic::resume_unwind(p));
+        if sent.as_ref().is_err_and(|e| {
+            matches!(
+                e.kind(),
+                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+            )
+        }) {
+            received?;
+            return sent.map_err(conn);
+        }
+        sent.map_err(conn)?;
+        received?;
+        finished.map_err(conn)
     }
 
     /// `BuildPathsWithResults` in normal mode; `paths` are legacy derived paths
@@ -1319,6 +1376,203 @@ pub fn failed_event(drv_path: &str, reason: &str) -> Event {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    #[cfg(unix)]
+    use std::{sync::mpsc, time::Duration};
+
+    #[cfg(unix)]
+    fn upload_pair() -> (Connection, UnixStream) {
+        let (client, daemon) = UnixStream::pair().unwrap();
+        for socket in [&client, &daemon] {
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+        }
+        let connection = Connection {
+            upload_socket: Some(client.try_clone().unwrap()),
+            from: BufReader::new(Box::new(client.try_clone().unwrap())),
+            to: BufWriter::new(Counting {
+                inner: Box::new(client),
+                bytes: 0,
+            }),
+            child: None,
+            minor: LATEST_MINOR,
+            daemon_nix_version: String::new(),
+            trusted: Some(true),
+            stats: Stats::default(),
+            activities: HashMap::new(),
+            parents: HashMap::new(),
+            ids: HashMap::new(),
+            builds: BuildCounts::default(),
+        };
+        (connection, daemon)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upload_drains_logs_before_daemon_reads_frames() {
+        let (mut connection, mut daemon) = upload_pair();
+        let server = thread::spawn(move || -> Result<()> {
+            assert_eq!(read_u64(&mut daemon)?, Op::AddMultipleToStore as u64);
+            assert_eq!(read_u64(&mut daemon)?, 0);
+            assert_eq!(read_u64(&mut daemon)?, 0);
+            write_u64(&mut daemon, STDERR_NEXT)?;
+            write_str(&mut daemon, &vec![b'x'; 4 << 20])?;
+            let mut total = 0;
+            loop {
+                let n = read_u64(&mut daemon)?;
+                if n == 0 {
+                    break;
+                }
+                total += io::copy(&mut (&mut daemon).take(n), &mut io::sink()).map_err(conn)?;
+            }
+            assert_eq!(total, 8 << 20);
+            write_u64(&mut daemon, STDERR_LAST)
+        });
+        let mut logs = Vec::new();
+        let result = connection.add_multiple_to_store(
+            false,
+            &mut |w| w.write_all(&vec![0; 8 << 20]),
+            &mut |e| {
+                if let Event::Log(log) = e {
+                    logs.push(log.line.len());
+                }
+            },
+        );
+        let server_result = server.join().unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        assert!(server_result.is_ok(), "{server_result:?}");
+        assert_eq!(logs, [4 << 20]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upload_stops_on_daemon_error_with_an_open_socket() {
+        let (mut connection, mut daemon) = upload_pair();
+        let (done, wait) = mpsc::channel();
+        let server = thread::spawn(move || -> Result<()> {
+            for _ in 0..3 {
+                read_u64(&mut daemon)?;
+            }
+            write_u64(&mut daemon, STDERR_ERROR)?;
+            write_str(&mut daemon, b"Error")?;
+            write_u64(&mut daemon, 0)?;
+            write_str(&mut daemon, b"")?;
+            write_str(&mut daemon, b"upload refused")?;
+            write_u64(&mut daemon, 0)?;
+            write_u64(&mut daemon, 0)?;
+            // Keep the peer open without reading the large upload.
+            wait.recv_timeout(Duration::from_secs(3)).unwrap();
+            Ok(())
+        });
+        let result = connection.add_multiple_to_store(
+            false,
+            &mut |w| w.write_all(&vec![0; 8 << 20]),
+            &mut |_| {},
+        );
+        done.send(()).unwrap();
+        server.join().unwrap().unwrap();
+        assert!(
+            matches!(result, Err(Error::Protocol(ref m)) if m == "upload refused"),
+            "{result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case(false)]
+    #[case(true)]
+    fn upload_finishes_frames_after_a_body_error(#[case] panics: bool) {
+        let (mut connection, mut daemon) = upload_pair();
+        let server = thread::spawn(move || -> Result<()> {
+            for _ in 0..3 {
+                read_u64(&mut daemon)?;
+            }
+            assert_eq!(read_u64(&mut daemon)?, 3);
+            let mut data = [0; 3];
+            daemon.read_exact(&mut data).map_err(conn)?;
+            assert_eq!(data, *b"nar");
+            assert_eq!(read_u64(&mut daemon)?, 0);
+            write_u64(&mut daemon, STDERR_LAST)
+        });
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            connection.add_multiple_to_store(
+                false,
+                &mut |w| {
+                    w.write_all(b"nar")?;
+                    if panics {
+                        panic!("source panicked");
+                    }
+                    Err(io::Error::other("source failed"))
+                },
+                &mut |_| {},
+            )
+        }));
+        server.join().unwrap().unwrap();
+        if panics {
+            assert!(result.is_err());
+        } else {
+            assert!(
+                result
+                    .unwrap()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("source failed")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upload_callback_panic_unblocks_sender() {
+        let (mut connection, mut daemon) = upload_pair();
+        let (done, wait) = mpsc::channel();
+        let server = thread::spawn(move || -> Result<()> {
+            for _ in 0..3 {
+                read_u64(&mut daemon)?;
+            }
+            write_u64(&mut daemon, STDERR_NEXT)?;
+            write_str(&mut daemon, b"log")?;
+            wait.recv_timeout(Duration::from_secs(3)).unwrap();
+            Ok(())
+        });
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            connection.add_multiple_to_store(
+                false,
+                &mut |w| w.write_all(&vec![0; 8 << 20]),
+                &mut |_| panic!("callback failed"),
+            )
+        }));
+        done.send(()).unwrap();
+        server.join().unwrap().unwrap();
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upload_keeps_connection_and_byte_counts() {
+        let (mut connection, mut daemon) = upload_pair();
+        let server = thread::spawn(move || -> Result<()> {
+            for _ in 0..2 {
+                for _ in 0..3 {
+                    read_u64(&mut daemon)?;
+                }
+                assert_eq!(read_u64(&mut daemon)?, 0);
+                write_u64(&mut daemon, STDERR_LAST)?;
+            }
+            Ok(())
+        });
+        for n in 1..=2 {
+            connection
+                .add_multiple_to_store(false, &mut |_| Ok(()), &mut |_| {})
+                .unwrap();
+            assert_eq!(connection.bytes_sent(), n * 32);
+            assert_eq!(connection.stats.bytes_sent, n * 32);
+        }
+        server.join().unwrap().unwrap();
+    }
 
     /// A status of 256 truncated to a `u8` is 0, which `success` reads as
     /// Built: a failed build would have been reported as a success.
