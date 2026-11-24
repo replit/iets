@@ -9,6 +9,7 @@ pub mod derivation;
 pub mod fetch;
 pub mod fetch_closure;
 pub mod fetch_git;
+mod go2nix;
 pub mod lists;
 pub mod math;
 pub mod paths;
@@ -65,6 +66,10 @@ pub fn install(ev: &mut Evaluator) {
     context::register(&mut r);
     text::register(&mut r);
     derivation::register(&mut r);
+    if ev.session().env.non_empty("IETS_GO2NIX_RESOLVER").is_some() {
+        ev.trace().mark_uncacheable();
+        go2nix::register(&mut r);
+    }
 
     r.constant("true", Word::TRUE);
     r.constant("false", Word::FALSE);

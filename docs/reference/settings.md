@@ -61,6 +61,35 @@ prints cover every worker.
 ties the caches to the binary. `ARCHITECTURE.md`, under "Benchmarks", lists the
 benchmark scripts that read the statistics knobs.
 
+### Optional Go package resolver
+
+`IETS_GO2NIX_RESOLVER` is a host-only, absolute executable path. When set,
+iets exposes `builtins.resolveGoPackages`. It is not read from `iets.toml`
+or a flake, and is disabled by default. `plugin-files` still does not load
+native Nix plugins.
+
+The executable reads go2nix's input object as JSON from stdin and writes
+its result object as JSON to stdout. A nonzero exit fails the evaluation
+with the helper's stderr. The host supplies the resolver and Go toolchain;
+iets does not implement a second Go dependency resolver. A helper can wrap
+go2nix's resolver library or call only the builtin through a plugin-enabled
+Nix executable, without reevaluating the flake.
+
+iets materializes the exact filtered source tree before invoking the helper,
+including sources held only in its virtual store. Paths returned by go2nix
+must remain source-relative. Derivation-backed arguments are unsupported:
+this adapter never builds to discover dependencies. Evaluations with the
+adapter enabled do not use the tracing cache, because the resolver may read
+the host's Go module cache and environment.
+
+The flake's `lib.mkGo2nixResolver pkgs { nix = ...; pluginFile = ...; }`
+packages a helper using an existing plugin-enabled Nix installation.
+`pluginFile` is the absolute `.so` path, and `nix` must match the plugin's
+Nix ABI. Set `IETS_GO2NIX_RESOLVER` to the resulting package's
+`bin/iets-go2nix-resolver`. This invokes Nix for the resolver call alone,
+not for flake discovery or derivation evaluation. It neither installs a
+plugin nor enables the adapter by default.
+
 ### fix-hashes
 
 - `ask` asks `[y/n/a]` for each fix when stdin and stderr are terminals and
