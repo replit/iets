@@ -25,6 +25,10 @@ These hold for every builtin:
 When a note mentions a difference, `docs/reference/divergences.md` has the
 details. To add a builtin, see `docs/how-to/add-a-builtin.md`.
 
+`builtins.resolveGoPackages` is an optional extension, not a standard Nix
+builtin. It is available only when the host supplies `IETS_GO2NIX_RESOLVER`;
+see [Optional Go package resolver](settings.md#optional-go-package-resolver).
+
 ## Status
 
 Every builtin that is not in this table works as it does in Nix.
